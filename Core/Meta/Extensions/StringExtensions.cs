@@ -127,6 +127,12 @@ namespace Core.Meta.Extensions
             {
                 return string.Empty;
             }
+
+            if (input.All(char.IsUpper))
+            {
+                return input.ToLower();
+            }
+
             if (input.Length == 1)
             {
                 return input;
