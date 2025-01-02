@@ -13,11 +13,11 @@ using Core.Parser.Extensions;
 namespace Core.Meta
 {
     /// <summary>
-    /// Represents the contents of a textual Bebop schema 
+    /// Represents the contents of a textual Bebop schema
     /// </summary>
     public struct BebopSchema
     {
-        private static string[] _enumZeroNames = new[] { "Default", "Unknown", "Invalid", "Null", "None", "Zero", "False" };
+        private static string[] _enumZeroNames = new[] { "Any", "Default", "Unknown", "Invalid", "Null", "None", "Zero", "False" };
         private List<SpanException> _parsingErrors;
         private List<SpanException> _parsingWarnings;
         private List<SpanException> _validationErrors;
@@ -50,19 +50,24 @@ namespace Core.Meta
         public Dictionary<string, Definition> Definitions { get; }
 
         /// <summary>
-        /// A cached result of SortedDefinitions.
+        /// A cached definitions result of SortedDefinitions.
         /// </summary>
         private List<Definition>? _sortedDefinitions;
+
+        /// <summary>
+        /// A cached cyclic definitions result of SortedDefinitions.
+        /// </summary>
+        private List<string>? _cyclicDefinitionNames;
 
         private HashSet<(Token, Token)> _typeReferences;
 
         /// <summary>
         /// A topologically sorted list of definitions.
         /// </summary>
-        public List<Definition> SortedDefinitions()
+        public (List<Definition>, List<string>) SortedDefinitions()
         {
             // Return the cached result if it exists.
-            if (_sortedDefinitions != null) return _sortedDefinitions;
+            if (_sortedDefinitions != null && _cyclicDefinitionNames != null) return (_sortedDefinitions, _cyclicDefinitionNames);
 
             // https://en.wikipedia.org/w/index.php?title=Topological_sorting&oldid=1011036708#Kahn%27s_algorithm
             // We keep track of node in-degrees and an adjacency list.
@@ -109,14 +114,15 @@ namespace Core.Meta
                 }
             }
 
-            var cycle = in_degree.FirstOrDefault(kv => kv.Value > 0);
-            if (cycle.Key != null)
+            _cyclicDefinitionNames = in_degree.Where(kv => kv.Value > 0).Select(kv => kv.Key).ToList();
+            foreach (string name in _cyclicDefinitionNames)
             {
-                throw new CyclicDefinitionsException(Definitions[cycle.Key]);
+                if (sortedList.All(d => d.Name != name))
+                    sortedList.Add(Definitions[name]);
             }
 
             _sortedDefinitions = sortedList;
-            return _sortedDefinitions;
+            return (_sortedDefinitions, _cyclicDefinitionNames);
         }
 
         private readonly List<SpanException> ValidateDefinitionDecorators(List<SchemaDecorator> decorators, Definition definition)
