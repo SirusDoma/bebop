@@ -57,14 +57,14 @@ namespace Core.Meta
         /// <summary>
         /// A cached cyclic definitions result of SortedDefinitions.
         /// </summary>
-        private List<string>? _cyclicDefinitionNames;
+        private Dictionary<string, List<string>>? _cyclicDefinitionNames;
 
         private HashSet<(Token, Token)> _typeReferences;
 
         /// <summary>
         /// A topologically sorted list of definitions.
         /// </summary>
-        public (List<Definition>, List<string>) SortedDefinitions()
+        public (List<Definition>, Dictionary<string, List<string>>) SortedDefinitions()
         {
             // Return the cached result if it exists.
             if (_sortedDefinitions != null && _cyclicDefinitionNames != null) return (_sortedDefinitions, _cyclicDefinitionNames);
@@ -114,8 +114,8 @@ namespace Core.Meta
                 }
             }
 
-            _cyclicDefinitionNames = in_degree.Where(kv => kv.Value > 0).Select(kv => kv.Key).ToList();
-            foreach (string name in _cyclicDefinitionNames)
+            _cyclicDefinitionNames = graph.Where(x => in_degree.Where(kv => kv.Value > 0).Select(kv => kv.Key).Contains(x.Key)).ToDictionary();
+            foreach ((string name, _) in _cyclicDefinitionNames)
             {
                 if (sortedList.All(d => d.Name != name))
                     sortedList.Add(Definitions[name]);

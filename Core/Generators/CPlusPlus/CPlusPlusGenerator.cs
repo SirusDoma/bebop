@@ -1,10 +1,9 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -48,7 +47,7 @@ namespace Core.Generators.CPlusPlus
 
         private string CompileEncodeMessage(MessageDefinition definition)
         {
-            var builder = new IndentedStringBuilder(4);
+            var builder = new IndentedStringBuilder(8);
             builder.AppendLine($"const auto pos = writer.reserveMessageLength();");
             builder.AppendLine($"const auto start = writer.length();");
             foreach (var field in definition.Fields)
@@ -58,8 +57,8 @@ namespace Core.Generators.CPlusPlus
                     continue;
                 }
                 builder.AppendLine($"if (message.{field.Name}.has_value()) {{");
-                builder.AppendLine($"  writer.writeByte({field.ConstantValue});");
-                builder.AppendLine($"  {CompileEncodeField(field.Type, $"message.{field.Name}.value()", 0, 1)}");
+                builder.AppendLine($"    writer.writeByte({field.ConstantValue});");
+                builder.AppendLine($"    {CompileEncodeField(field.Type, $"message.{field.Name}.value()", 0, 1, true)}");
                 builder.AppendLine($"}}");
             }
             builder.AppendLine("writer.writeByte(0);");
@@ -70,7 +69,7 @@ namespace Core.Generators.CPlusPlus
 
         private string CompileEncodeStruct(StructDefinition definition)
         {
-            var builder = new IndentedStringBuilder(4);
+            var builder = new IndentedStringBuilder(8);
             foreach (var field in definition.Fields)
             {
                 builder.AppendLine(CompileEncodeField(field.Type, $"message.{field.Name}"));
@@ -80,9 +79,9 @@ namespace Core.Generators.CPlusPlus
 
         private string CompileEncodeUnion(UnionDefinition definition)
         {
-            var builder = new IndentedStringBuilder(4);
+            var builder = new IndentedStringBuilder(8);
             builder.AppendLine($"const auto pos = writer.reserveMessageLength();");
-            builder.AppendLine($"const uint8_t discriminator = message.variant.index() + 1;");
+            builder.AppendLine($"const std::uint8_t discriminator = message.variant.index() + 1;");
             builder.AppendLine($"writer.writeByte(discriminator);");
             builder.AppendLine($"const auto start = writer.length();");
             builder.AppendLine($"switch (discriminator) {{");
@@ -90,8 +89,8 @@ namespace Core.Generators.CPlusPlus
             foreach (var branch in definition.Branches)
             {
                 builder.AppendLine($" case {branch.Discriminator}:");
-                builder.AppendLine($"  {branch.Definition.Name}::encodeInto(std::get<{i++}>(message.variant), writer);");
-                builder.AppendLine($"  break;");
+                builder.AppendLine($"    {branch.Definition.Name}::encodeInto(std::get<{i++}>(message.variant), writer);");
+                builder.AppendLine($"    break;");
             }
             builder.AppendLine($"}}");
             builder.AppendLine("const auto end = writer.length();");
@@ -99,7 +98,7 @@ namespace Core.Generators.CPlusPlus
             return builder.ToString();
         }
 
-        private string CompileEncodeField(TypeBase type, string target, int depth = 0, int indentDepth = 0)
+        private string CompileEncodeField(TypeBase type, string target, int depth = 0, int indentDepth = 0, bool isOptional = false)
         {
             var tab = new string(' ', indentStep);
             var nl = "\n" + new string(' ', indentDepth * indentStep);
@@ -140,6 +139,7 @@ namespace Core.Generators.CPlusPlus
                 },
                 DefinedType dt when Schema.Definitions[dt.Name] is EnumDefinition ed =>
                     CompileEncodeField(ed.ScalarType, $"static_cast<{TypeName(ed.ScalarType)}>({target})", depth, indentDepth),
+                DefinedType dt when isOptional => $"::bebop::encodeInto<{Config.Namespace}::{dt.Name}>({target}, writer);",
                 DefinedType dt => $"{dt.Name}::encodeInto({target}, writer);",
                 _ => throw new InvalidOperationException($"CompileEncodeField: {type}")
             };
@@ -168,23 +168,23 @@ namespace Core.Generators.CPlusPlus
         /// <returns>The generated CPlusPlus <c>decode</c> function body.</returns>
         private string CompileDecodeMessage(MessageDefinition definition)
         {
-            var builder = new IndentedStringBuilder(4);
+            var builder = new IndentedStringBuilder(8);
             builder.AppendLine("const auto length = reader.readLengthPrefix();");
             builder.AppendLine("const auto end = reader.pointer() + length;");
             builder.AppendLine("while (true) {");
             builder.Indent(2);
             builder.AppendLine("switch (reader.readByte()) {");
-            builder.AppendLine("  case 0:");
-            builder.AppendLine("    return reader.bytesRead();");
+            builder.AppendLine("    case 0:");
+            builder.AppendLine("        return reader.bytesRead();");
             foreach (var field in definition.Fields)
             {
-                builder.AppendLine($"  case {field.ConstantValue}:");
-                builder.AppendLine($"    {CompileDecodeField(field.Type, $"target.{field.Name}", 0, 2, true)}");
-                builder.AppendLine("    break;");
+                builder.AppendLine($"    case {field.ConstantValue}:");
+                builder.AppendLine($"        {CompileDecodeField(field.Type, $"target.{field.Name}", 0, 2, true)}");
+                builder.AppendLine("        break;");
             }
-            builder.AppendLine("  default:");
-            builder.AppendLine("    reader.seek(end);");
-            builder.AppendLine("    return reader.bytesRead();");
+            builder.AppendLine("    default:");
+            builder.AppendLine("        reader.seek(end);");
+            builder.AppendLine("        return reader.bytesRead();");
             builder.AppendLine("}");
             builder.Dedent(2);
             builder.AppendLine("}");
@@ -193,7 +193,7 @@ namespace Core.Generators.CPlusPlus
 
         private string CompileDecodeStruct(StructDefinition definition)
         {
-            var builder = new IndentedStringBuilder(4);
+            var builder = new IndentedStringBuilder(8);
             int i = 0;
             foreach (var field in definition.Fields)
             {
@@ -207,22 +207,22 @@ namespace Core.Generators.CPlusPlus
 
         private string CompileDecodeUnion(UnionDefinition definition)
         {
-            var builder = new IndentedStringBuilder(4);
+            var builder = new IndentedStringBuilder(8);
             builder.AppendLine("const auto length = reader.readLengthPrefix();");
             builder.AppendLine("const auto end = reader.pointer() + length + 1;");
             builder.AppendLine("switch (reader.readByte()) {");
             int i = 0;
             foreach (var branch in definition.Branches)
             {
-                builder.AppendLine($"  case {branch.Discriminator}:");
-                builder.AppendLine($"    target.variant.emplace<{i}>();");
-                builder.AppendLine($"    {branch.Definition.Name}::decodeInto(reader, std::get<{i}>(target.variant));");
-                builder.AppendLine("    break;");
+                builder.AppendLine($"    case {branch.Discriminator}:");
+                builder.AppendLine($"        target.variant.emplace<{i}>();");
+                builder.AppendLine($"        {branch.Definition.Name}::decodeInto(reader, std::get<{i}>(target.variant));");
+                builder.AppendLine("        break;");
                 i++;
             }
-            builder.AppendLine("  default:");
-            builder.AppendLine("    reader.seek(end); // do nothing?");
-            builder.AppendLine("    return reader.bytesRead();");
+            builder.AppendLine("    default:");
+            builder.AppendLine("        reader.seek(end); // do nothing?");
+            builder.AppendLine("        return reader.bytesRead();");
             builder.AppendLine("}");
             return builder.ToString();
         }
@@ -281,8 +281,8 @@ namespace Core.Generators.CPlusPlus
                     $"}}",
                 ScalarType st => $"{target} = {ReadBaseType(st.BaseType)};",
                 DefinedType dt when Schema.Definitions[dt.Name] is EnumDefinition ed =>
-                    $"{target} = static_cast<{dt.Name}>({ReadBaseType(ed.BaseType)});",
-                DefinedType dt when isOptional => $"{target}.emplace({dt.Name}::decode(reader));",
+                    $"{target} = static_cast<{Config.Namespace}::{dt.Name}>({ReadBaseType(ed.BaseType)});",
+                DefinedType dt when isOptional => $"::bebop::decodeInto<{Config.Namespace}::{dt.Name}>(reader, {target});",
                 DefinedType dt => $"{dt.Name}::decodeInto(reader, {target});",
                 _ => throw new InvalidOperationException($"CompileDecodeField: {type}")
             };
@@ -301,13 +301,13 @@ namespace Core.Generators.CPlusPlus
                     return st.BaseType switch
                     {
                         BaseType.Bool => "bool",
-                        BaseType.Byte => "uint8_t",
-                        BaseType.UInt16 => "uint16_t",
-                        BaseType.Int16 => "int16_t",
-                        BaseType.UInt32 => "uint32_t",
-                        BaseType.Int32 => "int32_t",
-                        BaseType.UInt64 => "uint64_t",
-                        BaseType.Int64 => "int64_t",
+                        BaseType.Byte => "std::uint8_t",
+                        BaseType.UInt16 => "std::uint16_t",
+                        BaseType.Int16 => "std::int16_t",
+                        BaseType.UInt32 => "std::uint32_t",
+                        BaseType.Int32 => "std::int32_t",
+                        BaseType.UInt64 => "std::uint64_t",
+                        BaseType.Int64 => "std::int64_t",
                         BaseType.Float32 => "float",
                         BaseType.Float64 => "double",
                         BaseType.String => "std::string",
@@ -316,19 +316,21 @@ namespace Core.Generators.CPlusPlus
                         _ => throw new ArgumentOutOfRangeException(st.BaseType.ToString())
                     };
                 // case ArrayType at when at.IsBytes():
-                //     return "std::vector<uint8_t>";
+                //     return "std::vector<std::uint8_t>";
                 case ArrayType at:
                     return $"std::vector<{TypeName(at.MemberType)}>";
                 case MapType mt:
                     return $"std::map<{TypeName(mt.KeyType)}, {TypeName(mt.ValueType)}>";
                 case DefinedType dt:
-                    var isEnum = Schema.Definitions[dt.Name] is EnumDefinition;
-                    return dt.Name;
+                    return $"{Config.Namespace}::{dt.Name}";
             }
             throw new InvalidOperationException($"GetTypeName: {type}");
         }
 
-        private static string Optional(string type) => "std::optional<" + type + ">";
+        private string Optional(TypeBase type)
+        {
+            return type is not DefinedType dt || dt.IsEnum(Schema) ? $"std::optional<{TypeName(type)}>" : $"::bebop::Optional<{TypeName(type)}>";
+        }
 
         private static string EscapeStringLiteral(string value)
         {
@@ -360,6 +362,8 @@ namespace Core.Generators.CPlusPlus
             Schema = schema;
             Config = config;
             var builder = new StringBuilder();
+            string outputPath = Path.GetDirectoryName(Config.OutFile)!;
+
             if (Config.EmitNotice)
             {
                 builder.AppendLine(GeneratorUtils.GetXmlAutoGeneratedNotice());
@@ -374,47 +378,75 @@ namespace Core.Generators.CPlusPlus
             builder.AppendLine("#include <variant>");
             builder.AppendLine("#include <vector>");
             builder.AppendLine("#include \"bebop.hpp\"");
+
+            var baseBuilder = new StringBuilder(builder.ToString());
             builder.AppendLine("");
 
+            var (definitions, cyclics) = Schema.SortedDefinitions();
             if (!string.IsNullOrWhiteSpace(Config.Namespace))
             {
                 builder.AppendLine($"namespace {Config.Namespace} {{");
                 builder.AppendLine("");
             }
 
-            foreach (var definition in Schema.SortedDefinitions())
+            foreach (Definition? definition in cyclics.Select(cyclic => Schema.Definitions[cyclic.Key]))
             {
+                switch (definition)
+                {
+                    case RecordDefinition td:
+                        builder.AppendLine($"struct {td.Name};");
+                        break;
+                    case EnumDefinition:
+                    case ConstDefinition:
+                    case ServiceDefinition:
+                        break;
+                    default:
+                        throw new InvalidOperationException($"unsupported definition {definition}");
+                }
+            }
+
+            foreach (var definition in definitions)
+            {
+                var definitionBuilder = new StringBuilder();
+                var includeBuilder = new StringBuilder(baseBuilder.ToString());
+
                 if (!string.IsNullOrWhiteSpace(definition.Documentation))
                 {
-                    builder.Append(FormatDocumentation(definition.Documentation, 0));
+                    definitionBuilder.Append(FormatDocumentation(definition.Documentation, 0));
                 }
                 switch (definition)
                 {
                     case EnumDefinition ed:
-                        builder.AppendLine($"enum class {definition.Name} : {TypeName(ed.ScalarType)} {{");
+                        definitionBuilder.AppendLine($"enum class {definition.Name} : {TypeName(ed.ScalarType)} {{");
                         for (var i = 0; i < ed.Members.Count; i++)
                         {
                             var field = ed.Members.ElementAt(i);
                             if (!string.IsNullOrWhiteSpace(field.Documentation))
                             {
-                                builder.Append(FormatDocumentation(field.Documentation, 2));
+                                definitionBuilder.Append(FormatDocumentation(field.Documentation, 2));
                             }
                             if (field.DeprecatedDecorator is not null && field.DeprecatedDecorator.TryGetValue("reason", out var reason))
                             {
-                                builder.AppendLine($"  /// @deprecated {reason}");
+                                definitionBuilder.AppendLine($"    /// @deprecated {reason}");
                             }
-                            builder.AppendLine($"  {field.Name} = {field.ConstantValue},");
+                            definitionBuilder.AppendLine($"    {field.Name} = {field.ConstantValue},");
                         }
-                        builder.AppendLine("};");
-                        builder.AppendLine("");
+                        definitionBuilder.AppendLine("};");
+                        definitionBuilder.AppendLine("");
                         break;
                     case RecordDefinition td:
-                        builder.AppendLine($"struct {td.Name} {{");
-                        builder.AppendLine($"  static const size_t minimalEncodedSize = {td.MinimalEncodedSize(Schema)};");
+                        definitionBuilder.AppendLine($"struct {td.Name} {{");
+                        definitionBuilder.AppendLine($"    static constexpr size_t minimalEncodedSize = {td.MinimalEncodedSize(Schema)};");
                         if (td.OpcodeDecorator is not null && td.OpcodeDecorator.TryGetValue("fourcc", out var fourcc))
                         {
-                            builder.AppendLine($"  static const uint32_t opcode = {fourcc};");
-                            builder.AppendLine("");
+                            definitionBuilder.AppendLine($"    static const std::uint32_t opcode = {fourcc};");
+                            definitionBuilder.AppendLine("");
+                        }
+
+                        if (td.DiscriminatorInParent != null)
+                        {
+                            definitionBuilder.AppendLine($"    static constexpr std::uint32_t discriminator = {td.DiscriminatorInParent};");
+                            definitionBuilder.AppendLine("");
                         }
 
                         if (td is FieldsDefinition fd)
@@ -423,97 +455,232 @@ namespace Core.Generators.CPlusPlus
                             for (var i = 0; i < fd.Fields.Count; i++)
                             {
                                 var field = fd.Fields.ElementAt(i);
-                                var type = TypeName(field.Type);
                                 if (!string.IsNullOrWhiteSpace(field.Documentation))
                                 {
-                                    builder.Append(FormatDocumentation(field.Documentation, 2));
+                                    definitionBuilder.Append(FormatDocumentation(field.Documentation, 2));
                                 }
                                 if (field.DeprecatedDecorator is not null && field.DeprecatedDecorator.TryGetValue("reason", out var reason))
                                 {
-                                    builder.AppendLine($"  /// @deprecated {reason}");
+                                    definitionBuilder.AppendLine($"    /// @deprecated {reason}");
                                 }
-                                builder.AppendLine($"  {(isMessage ? Optional(type) : type)} {field.Name};");
+
+                                definitionBuilder.AppendLine($"    {(isMessage ? Optional(field.Type) : TypeName(field.Type))} {field.Name};");
                             }
-                            builder.AppendLine("");
+                            definitionBuilder.AppendLine("");
                         }
                         else if (td is UnionDefinition ud)
                         {
-                            var types = string.Join(", ", ud.Branches.Select(b => b.Definition.Name));
-                            builder.AppendLine($"  std::variant<{types}> variant;");
+                            includeBuilder.AppendLine();
+                            foreach (string branch in ud.Branches.Select(b => b.Definition.Name))
+                            {
+                                includeBuilder.AppendLine($"#include \"{branch}.g.hpp\"");
+                            }
+
+                            var types = ud.Branches.Select(b => $"{Config.Namespace}::{b.Definition.Name}").ToList();
+                            definitionBuilder.AppendLine($"    using Union = std::variant<{string.Join(", ", types)}>;");
+                            definitionBuilder.AppendLine($"    Union variant;");
+                            definitionBuilder.AppendLine();
+
+                            definitionBuilder.AppendLine($"    {td.Name}() = default;");
+                            foreach (string t in types.Where(t => !string.IsNullOrEmpty(t)))
+                            {
+                                definitionBuilder.AppendLine($"    {td.Name}({t} value) : variant(std::move(value)) {{}}");
+                            }
+
+                            definitionBuilder.AppendLine();
+                            definitionBuilder.AppendLine("    template<typename T>");
+                            definitionBuilder.AppendLine("    bool is() const {{");
+                            definitionBuilder.AppendLine("        return std::holds_alternative<T>(variant);");
+                            definitionBuilder.AppendLine("    }}");
+                            definitionBuilder.AppendLine();
+                            definitionBuilder.AppendLine("    template<typename T>");
+                            definitionBuilder.AppendLine("    T& get() const {{");
+                            definitionBuilder.AppendLine("        if (!is<T>()) {{");
+                            definitionBuilder.AppendLine("            throw std::bad_variant_access();");
+                            definitionBuilder.AppendLine("        }}");
+                            definitionBuilder.AppendLine("        return std::get<T>(variant);");
+                            definitionBuilder.AppendLine("    }}");
+                            definitionBuilder.AppendLine();
                         }
                         else
                         {
                             throw new InvalidOperationException($"unsupported definition {td}");
                         }
 
-                        builder.AppendLine($"  static size_t encodeInto(const {td.Name}& message, std::vector<uint8_t>& targetBuffer) {{");
-                        builder.AppendLine("    ::bebop::Writer writer{targetBuffer};");
-                        builder.AppendLine($"    return {td.Name}::encodeInto(message, writer);");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("");
-                        builder.AppendLine($"  template<typename T = ::bebop::Writer> static size_t encodeInto(const {td.Name}& message, T& writer) {{");
-                        builder.AppendLine("    size_t before = writer.length();");
-                        builder.Append(CompileEncode(td));
-                        builder.AppendLine("    size_t after = writer.length();");
-                        builder.AppendLine("    return after - before;");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("");
-                        builder.AppendLine($"  size_t encodeInto(std::vector<uint8_t>& targetBuffer) {{ return {td.Name}::encodeInto(*this, targetBuffer); }}");
-                        builder.AppendLine($"  size_t encodeInto(::bebop::Writer& writer) {{ return {td.Name}::encodeInto(*this, writer); }}");
-                        builder.AppendLine("");
-                        builder.AppendLine($"  static {td.Name} decode(const uint8_t* sourceBuffer, size_t sourceBufferSize) {{");
-                        builder.AppendLine($"    {td.Name} result;");
-                        builder.AppendLine($"    {td.Name}::decodeInto(sourceBuffer, sourceBufferSize, result);");
-                        builder.AppendLine($"    return result;");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("");
-                        builder.AppendLine($"  static {td.Name} decode(std::vector<uint8_t> sourceBuffer) {{");
-                        builder.AppendLine($"    return {td.Name}::decode(sourceBuffer.data(), sourceBuffer.size());");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("");
-                        builder.AppendLine($"  static {td.Name} decode(::bebop::Reader& reader) {{");
-                        builder.AppendLine($"    {td.Name} result;");
-                        builder.AppendLine($"    {td.Name}::decodeInto(reader, result);");
-                        builder.AppendLine($"    return result;");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("");
-                        builder.AppendLine($"  static size_t decodeInto(const uint8_t* sourceBuffer, size_t sourceBufferSize, {td.Name}& target) {{");
-                        builder.AppendLine("    ::bebop::Reader reader{sourceBuffer, sourceBufferSize};");
-                        builder.AppendLine($"    return {td.Name}::decodeInto(reader, target);");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("");
-                        builder.AppendLine($"  static size_t decodeInto(std::vector<uint8_t> sourceBuffer, {td.Name}& target) {{");
-                        builder.AppendLine($"    return {td.Name}::decodeInto(sourceBuffer.data(), sourceBuffer.size(), target);");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("");
-                        builder.AppendLine($"  static size_t decodeInto(::bebop::Reader& reader, {td.Name}& target) {{");
-                        builder.Append(CompileDecode(td));
-                        builder.AppendLine("    return reader.bytesRead();");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("");
-                        builder.AppendLine("  size_t byteCount() {");
-                        builder.AppendLine("    ::bebop::ByteCounter counter{};");
-                        builder.AppendLine($"    {td.Name}::encodeInto<::bebop::ByteCounter>(*this, counter);");
-                        builder.AppendLine("    return counter.length();");
-                        builder.AppendLine("  }");
-                        builder.AppendLine("};");
-                        builder.AppendLine("");
+                        definitionBuilder.AppendLine($"    static size_t encodeInto(const {td.Name}& message, std::vector<std::uint8_t>& targetBuffer) {{");
+                        definitionBuilder.AppendLine("        ::bebop::Writer writer{targetBuffer};");
+                        definitionBuilder.AppendLine($"        return {td.Name}::encodeInto(message, writer);");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine($"    template<typename T = ::bebop::Writer>");
+                        definitionBuilder.AppendLine($"    static size_t encodeInto(const {td.Name}& message, T& writer) {{");
+                        definitionBuilder.AppendLine("        size_t before = writer.length();");
+                        definitionBuilder.Append(CompileEncode(td));
+                        definitionBuilder.AppendLine("        size_t after = writer.length();");
+                        definitionBuilder.AppendLine("        return after - before;");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine($"    size_t encodeInto(std::vector<std::uint8_t>& targetBuffer) {{ return {td.Name}::encodeInto(*this, targetBuffer); }}");
+                        definitionBuilder.AppendLine($"    size_t encodeInto(::bebop::Writer& writer) {{ return {td.Name}::encodeInto(*this, writer); }}");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine($"    static {td.Name} decode(const std::uint8_t* sourceBuffer, size_t sourceBufferSize) {{");
+                        definitionBuilder.AppendLine($"        {td.Name} result;");
+                        definitionBuilder.AppendLine($"        {td.Name}::decodeInto(sourceBuffer, sourceBufferSize, result);");
+                        definitionBuilder.AppendLine($"        return result;");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine($"    static {td.Name} decode(std::vector<std::uint8_t>& sourceBuffer) {{");
+                        definitionBuilder.AppendLine($"        return {td.Name}::decode(sourceBuffer.data(), sourceBuffer.size());");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine($"    static {td.Name} decode(::bebop::Reader& reader) {{");
+                        definitionBuilder.AppendLine($"        {td.Name} result;");
+                        definitionBuilder.AppendLine($"        {td.Name}::decodeInto(reader, result);");
+                        definitionBuilder.AppendLine($"        return result;");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine($"    static size_t decodeInto(const std::uint8_t* sourceBuffer, size_t sourceBufferSize, {td.Name}& target) {{");
+                        definitionBuilder.AppendLine("        ::bebop::Reader reader{sourceBuffer, sourceBufferSize};");
+                        definitionBuilder.AppendLine($"        return {td.Name}::decodeInto(reader, target);");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine($"    static size_t decodeInto(std::vector<std::uint8_t>& sourceBuffer, {td.Name}& target) {{");
+                        definitionBuilder.AppendLine($"        return {td.Name}::decodeInto(sourceBuffer.data(), sourceBuffer.size(), target);");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine($"    static size_t decodeInto(::bebop::Reader& reader, {td.Name}& target) {{");
+                        definitionBuilder.Append(CompileDecode(td));
+                        definitionBuilder.AppendLine("        return reader.bytesRead();");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("");
+                        definitionBuilder.AppendLine("    size_t byteCount() {");
+                        definitionBuilder.AppendLine("        ::bebop::ByteCounter counter{};");
+                        definitionBuilder.AppendLine($"        {td.Name}::encodeInto<::bebop::ByteCounter>(*this, counter);");
+                        definitionBuilder.AppendLine("        return counter.length();");
+                        definitionBuilder.AppendLine("    }");
+                        definitionBuilder.AppendLine("};");
+                        definitionBuilder.AppendLine("");
                         break;
                     case ConstDefinition cd:
-                        builder.AppendLine($"const {TypeName(cd.Value.Type)} {cd.Name} = {EmitLiteral(cd.Value)};");
-                        builder.AppendLine("");
+                        definitionBuilder.AppendLine($"const {TypeName(cd.Value.Type)} {cd.Name} = {EmitLiteral(cd.Value)};");
+                        definitionBuilder.AppendLine("");
                         break;
                     case ServiceDefinition:
                         break;
                     default:
                         throw new InvalidOperationException($"unsupported definition {definition}");
                 }
+
+                builder.AppendLine(definitionBuilder.ToString());
+                var forwardBuilder = new StringBuilder();
+
+                if (cyclics.TryGetValue(definition.Name, out var cyc))
+                {
+                    definitionBuilder.AppendLine();
+
+                    bool hasInclude = false;
+                    bool hasForward = false;
+                    if (definition is MessageDefinition md)
+                    {
+                        var deps = md.Dependencies().Where(d => cyclics.ContainsKey(d)).ToList();
+                        foreach (string dep in deps)
+                        {
+                            bool forward = false;
+                            foreach (var type in md.Fields.Where(f => f.Type is DefinedType && !f.Type.IsEnum(Schema)).Select(f => f.Type as DefinedType))
+                            {
+                                if (type == null)
+                                    continue;
+
+                                if (type.IsEnum(Schema) || type.IsUnion(Schema))
+                                {
+                                    forward = false;
+                                    continue;
+                                }
+
+                                if (type.Name == dep)
+                                {
+                                    forward = true;
+                                    break;
+                                }
+                            }
+
+                            if (forward)
+                            {
+                                if (!hasForward)
+                                {
+                                    definitionBuilder.AppendLine("#include \"bebop.inl\"");
+                                    definitionBuilder.AppendLine();
+                                }
+
+                                forwardBuilder.AppendLine($"struct {dep};");
+                                hasForward = true;
+                            }
+                            else
+                            {
+                                if (!hasInclude)
+                                {
+                                    includeBuilder.AppendLine();
+                                }
+
+                                includeBuilder.AppendLine($"#include \"{dep}.g.hpp\"");
+                                hasInclude = true;
+                            }
+                        }
+                    }
+                    else if (definition.Dependencies().Any(d => cyc.Contains(d)))
+                    {
+                        includeBuilder.AppendLine("// WARNING: Cyclics dependencies are found in a struct:");
+                        foreach (var c in cyc)
+                            includeBuilder.AppendLine($"//   {c}");
+                    }
+                }
+                else if (definition is FieldsDefinition)
+                {
+                    includeBuilder.AppendLine();
+                    foreach (string dep in definition.Dependencies())
+                    {
+                        includeBuilder.AppendLine($"#include \"{dep}.g.hpp\"");
+                    }
+                }
+
+                includeBuilder.AppendLine();
+
+                var encoding = new UTF8Encoding(false);
+                File.WriteAllBytes(Path.Join(outputPath, $"{definition.Name}.g.hpp"), encoding.GetBytes($"{includeBuilder}{forwardBuilder}{definitionBuilder}"));
             }
 
             if (!string.IsNullOrWhiteSpace(Config.Namespace))
             {
                 builder.AppendLine($"}} // namespace {Config.Namespace}");
                 builder.AppendLine("");
+            }
+
+            var inlBuilder = new StringBuilder();
+            inlBuilder.AppendLine("#pragma once");
+            inlBuilder.AppendLine("#include \"bebop.hpp\"");
+            inlBuilder.AppendLine();
+            inlBuilder.AppendLine("namespace bebop {");
+            inlBuilder.AppendLine("    template<typename T, typename W>");
+            inlBuilder.AppendLine("    size_t encodeInto(const T& message, W& writer) {");
+            inlBuilder.AppendLine("        return T::encodeInto(message, writer);");
+            inlBuilder.AppendLine("    }");
+            inlBuilder.AppendLine();
+            inlBuilder.AppendLine("    template<typename T>");
+            inlBuilder.AppendLine("    size_t decodeInto(::bebop::Reader& reader, ::bebop::Optional<T>& target) {");
+            inlBuilder.AppendLine("        return T::decodeInto(reader, target.value_or_emplace());");
+            inlBuilder.AppendLine("    }");
+            inlBuilder.AppendLine("}");
+            inlBuilder.AppendLine();
+            File.WriteAllBytes(Path.Join(outputPath, "bebop.inl"), new UTF8Encoding(false).GetBytes(inlBuilder.ToString()));
+
+            builder.AppendLine("#include \"bebop.inl\"");
+            // Save this somewhere?
+
+            builder = new StringBuilder();
+            builder.AppendLine(baseBuilder.ToString());
+            foreach (var definition in definitions)
+            {
+                builder.AppendLine($"#include \"{definition.Name}.g.hpp\"");
             }
 
             return ValueTask.FromResult(builder.ToString());
@@ -525,6 +692,29 @@ namespace Core.Generators.CPlusPlus
         private static readonly Regex _patchRegex = new Regex($@"(?<=BEBOPC_VER_PATCH\s){_bytePattern}", RegexOptions.Compiled | RegexOptions.Singleline);
         private static readonly Regex _informationalRegex = new Regex($@"(?<=BEBOPC_VER_INFO\s){_bytePattern}", RegexOptions.Compiled | RegexOptions.Singleline);
 
+        private AuxiliaryFile LoadAuxiliaryFile(string fileName)
+        {
+            var assembly = Assembly.GetEntryAssembly()!;
+            var runtime = assembly.GetManifestResourceNames()!.FirstOrDefault(n => n.Contains(fileName))!;
+
+            using var stream = assembly.GetManifestResourceStream(runtime)!;
+            using var reader = new StreamReader(stream);
+            var builder = new StringBuilder();
+            while (!reader.EndOfStream)
+            {
+                if (reader.ReadLine() is string line)
+                {
+                    if (_majorRegex.IsMatch(line)) line = _majorRegex.Replace(line, DotEnv.Generated.Environment.Major.ToString());
+                    if (_minorRegex.IsMatch(line)) line = _minorRegex.Replace(line, DotEnv.Generated.Environment.Minor.ToString());
+                    if (_patchRegex.IsMatch(line)) line = _patchRegex.Replace(line, DotEnv.Generated.Environment.Patch.ToString());
+                    if (_informationalRegex.IsMatch(line)) line = _informationalRegex.Replace(line, $"\"{DotEnv.Generated.Environment.Version}\"");
+                    builder.AppendLine(line);
+
+                }
+            }
+            var encoding = new UTF8Encoding(false);
+            return new AuxiliaryFile(fileName, encoding.GetBytes(builder.ToString()));
+        }
 
         public override AuxiliaryFile? GetAuxiliaryFile()
         {
@@ -557,6 +747,10 @@ namespace Core.Generators.CPlusPlus
             {
                 File.WriteAllBytes(Path.Join(outputPath, auxiliary.Name), auxiliary.Content);
             }
+
+            // This is not working
+            // var inlineAuxiliary = LoadAuxiliaryFile("bebop.inl");
+            // File.WriteAllBytes(Path.Join(outputPath, auxiliary.Name), auxiliary.Content);
         }
 
         public override string Alias { get => "cpp"; set => throw new NotImplementedException(); }
