@@ -1221,7 +1221,7 @@ isAssignable:
 
         private static bool IsValidMapKeyType(TypeBase keyType)
         {
-            return keyType is ScalarType;
+            return keyType is ScalarType or DefinedType;
         }
 
         /// <summary>
